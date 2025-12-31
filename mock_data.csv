@@ -1,0 +1,11 @@
+ID,Name,Age,Company,Salary,JoinDate
+1,John Doe,28,TechCorp,50000,2022-01-15
+2,Jane Smith,34,InnovateInc,75000,2021-06-20
+3,Alice Johnson,29,TechCorp,55000,2023-03-10
+4,Bob Brown,,InnovateInc,60000,2020-11-05
+5,Charlie Davis,45,FutureSolutions,90000,2019-08-12
+6,John Doe,28,TechCorp,52000,2022-01-15
+7,,31,FutureSolutions,,2021-09-30
+8,Frank Wilson,120,TechCorp,48000,2023-05-21
+9,Grace Lee,26,WebSystems,100,2024-01-01
+10,Henry White,38,,85000,2018-12-12
