@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 from typing import Union, List, Dict, Optional, Any
+
+
 try:
     from pyspark.sql import DataFrame as SparkDataFrame
     import pyspark.sql.functions as F
@@ -9,11 +11,13 @@ except ImportError:
     class SparkDataFrame: pass # Dummy mostly for type hinting if not installed
     pass
 
+
 class DataProfiler:
     """
-    A class to perform data profiling checks on pandas and PySpark DataFrames.
+    Perform data profiling checks on pandas and PySpark DataFrames.
 
-    This class handles one or multiple datasets and allows for flexible configuration of checks.
+    Handles single or multiple datasets (list, dict, or single DataFrame) and
+    supports configurable checks.
 
     Usage:
     ------
@@ -23,36 +27,50 @@ class DataProfiler:
        - Dictionary: `DataProfiler({'train': df_train, 'test': df_test})`
 
     2. Run checks using `run_checks(check_config=...)`.
+       If `check_config` is None, default checks are run (data types, uniqueness, nulls, column length).
 
     Configuration (`check_config`):
     -------------------------------
-    Pass a dictionary to `run_checks` to specify which checks to run.
-    If `check_config` is None, a default suite (data types, uniqueness, nulls, column length) is run on ALL columns/datasets.
+    Pass a dictionary where keys are check names and values are configuration dicts.
+    Each configuration dict can contain:
+    - `columns`: List of columns to check (optional, defaults to all applicable).
+    - `datasets`: List of dataset names to check (optional, defaults to all).
+    - `params`: check-specific parameters (e.g., `min_val` for range checks).
 
-    Structure:
-    {
-        "check_method_name": {
-            "columns": ["col_A", "col_B"],  # Optional: List of columns to check. If omitted, checks ALL columns.
-            "datasets": ["dataset_0"],      # Optional: List of dataset names to check. If omitted, checks ALL datasets.
-            "params": { ... }               # Optional: Key-value pairs of parameters matching the check method's signature.
-        },
-        ...
-    }
-
-    Available Checks & Params:
-    --------------------------
-    - `check_nulls`: Checks for missing values.
-    - `check_uniqueness`: Checks for unique values and duplicates.
-    - `check_column_length`: Statistics on string lengths (min, max, avg).
+    Available Checks & Parameters:
+    ------------------------------
     - `check_data_types`: Reports data types.
-    - `check_range`: Checks if numeric values fall within a range.
-        - params: `min_val` (numeric), `max_val` (numeric)
-    - `check_date_range`: Checks if dates fall within a range.
-        - params: `min_date` (str/datetime), `max_date` (str/datetime)
-    - `check_distinct_values`: Lists unique values in the column.
+    - `check_nulls`: Counts null values.
+    - `check_uniqueness`: Checks for uniqueness and duplicates.
+    - `check_column_length`: String stats (min, max, avg length).
+    - `check_range`: Numeric range validation.
+        - Params: `min_val`, `max_val`
+    - `check_date_range`: Date range validation.
+        - Params: `min_date`, `max_date`
+    - `check_distinct_values`: Lists distinct values.
+
+    Output Structure:
+    -----------------
+    The output is a dictionary where keys are dataset names and values are Pandas DataFrames.
+    In each result DataFrame:
+    - **Index**: Column names of the profiled dataset.
+    - **Columns**: Metrics calculated by the checks.
+    
+    Common Result Columns:
+    - `dtype`: Data type of the column.
+    - `null_count`: Number of null/missing values.
+    - `is_unique`: Boolean indicating if the column values are unique.
+    - `duplicate_count`: Count of duplicate rows for that column.
+    - `min_length`, `max_length`, `avg_length`: String length statistics.
+    - `range_min`, `range_max`: Parameters used for range check.
+    - `out_of_range_count`: Count of values outside the specified numeric range.
+    - `date_range_min`, `date_range_max`: Parameters used for date range check.
+    - `date_out_of_range_count`: Count of dates outside the specified range.
+    - `distinct_values`: List of distinct values found.
 
     Example:
     --------
+    ```python
     profiler = DataProfiler(my_df)
     config = {
         "check_nulls": {"columns": ["id", "name"]},
@@ -62,13 +80,15 @@ class DataProfiler:
         }
     }
     results = profiler.run_checks(config)
-    # results['dataset_0'] is a DataFrame with columns as rows and metrics as columns.
+    # results['dataset_0'] is a DataFrame with cols like 'null_count', 'out_of_range_count'
+    ```
     """
     def __init__(self, data: Union[pd.DataFrame, SparkDataFrame, List[Union[pd.DataFrame, SparkDataFrame]], Dict[str, Union[pd.DataFrame, SparkDataFrame]]]):
         self.dfs = {}
         
         # Helper to check if object is a Spark DF (robust to import errors/missing lib)
         def is_spark(obj):
+            """Check if object is a Spark DataFrame."""
             return 'pyspark.sql.dataframe.DataFrame' in str(type(obj))
 
         if isinstance(data, pd.DataFrame) or is_spark(data):
@@ -89,6 +109,7 @@ class DataProfiler:
         return 'pyspark.sql.dataframe.DataFrame' in str(type(df))
 
     def _get_target_columns(self, df: pd.DataFrame, columns: Union[str, List[str], None]) -> List[str]:
+        """Resolve specific target columns or default to all."""
         if columns is None:
             return list(df.columns)
         if isinstance(columns, str):
@@ -96,11 +117,13 @@ class DataProfiler:
         return columns
 
     def _should_process_dataset(self, dataset_name: str, target_datasets: List[str] = None) -> bool:
+        """Determine if a dataset should be processed based on target list."""
         if target_datasets is None:
             return True
         return dataset_name in target_datasets
 
     def _record_result(self, dataset_name, check_name, column, result):
+        """Store a single check result in the results dictionary."""
         if check_name not in self.results[dataset_name]:
             self.results[dataset_name][check_name] = {}
         self.results[dataset_name][check_name][column] = result
@@ -182,7 +205,7 @@ class DataProfiler:
         return report
 
     def check_nulls(self, columns: Union[str, List[str], None] = None, datasets: List[str] = None):
-        """Check for nulls in specific column(s) or all columns."""
+        """Check for null count in specific column(s) or all columns."""
         report = {}
         for name, df in self.dfs.items():
             if not self._should_process_dataset(name, datasets):
@@ -208,7 +231,7 @@ class DataProfiler:
         return report
 
     def check_range(self, min_val, max_val, columns: Union[str, List[str], None] = None, datasets: List[str] = None):
-        """Check if numeric columns are within a range."""
+        """Check if numeric columns are within a specified range."""
         report = {}
         for name, df in self.dfs.items():
             if not self._should_process_dataset(name, datasets):
@@ -250,7 +273,7 @@ class DataProfiler:
         return report
 
     def check_date_range(self, min_date: str, max_date: str, columns: Union[str, List[str], None] = None, datasets: List[str] = None):
-        """Check if date columns are within a specific range."""
+        """Check if date columns are within a specified range."""
         min_ts = pd.to_datetime(min_date)
         max_ts = pd.to_datetime(max_date)
         
@@ -298,7 +321,7 @@ class DataProfiler:
         return report
 
     def check_distinct_values(self, columns: Union[str, List[str], None] = None, datasets: List[str] = None):
-        """Check distinct values in column(s)."""
+        """List distinct values in column(s)."""
         report = {}
         for name, df in self.dfs.items():
             if not self._should_process_dataset(name, datasets):
@@ -323,7 +346,7 @@ class DataProfiler:
         return report
 
     def check_data_types(self, columns: Union[str, List[str], None] = None, datasets: List[str] = None):
-        """Check data types of all columns."""
+        """Report data types of all columns."""
         report = {}
         for name, df in self.dfs.items():
             if not self._should_process_dataset(name, datasets):
@@ -348,12 +371,10 @@ class DataProfiler:
     def run_checks(self, check_config: Dict[str, Dict] = None, clear_previous: bool = True):
         """
         Orchestrate checks based on configuration.
-        Config structure:
-        {
-            "check_name": { "columns": ["ColA"], "datasets": ["dataset_0"], "params": {"min_val": 0, ...} }
-        }
-        If check_config is None, runs default checks (uniqueness, nulls, lengths, types) on all columns.
-        If clear_previous is True (default), previous results are discarded before running new checks.
+
+        Args:
+            check_config: Dictionary mapping check names to their configuration.
+            clear_previous: Whether to clear previous results before running checks.
         """
         if clear_previous:
             self.results = {name: {} for name in self.dfs.keys()}
@@ -384,6 +405,7 @@ class DataProfiler:
         return self._get_results_as_dataframes()
 
     def _get_results_as_dataframes(self) -> Dict[str, pd.DataFrame]:
+        """Convert results dictionary to a dictionary of Pandas DataFrames."""
         flattened_results = {}
         
         for ds_name, checks in self.results.items():
@@ -413,7 +435,14 @@ class DataProfiler:
                             # Exception: check_data_types just returns 'dtype' key?
                             if check_name == 'data_types' and k == 'dtype':
                                 metric_name = 'dtype'
+                            
+                            # Clean up column names by removing redundant prefixes if the key is descriptive enough
+                            elif k in ['null_count', 'is_unique', 'duplicate_count', 
+                                       'min_length', 'max_length', 'avg_length', 
+                                       'distinct_values']:
+                                metric_name = k
                             else:
+                                # Default fallback to prevent collisions or ambiguous names
                                 metric_name = f"{check_name}_{k}"
                             
                             rows[col][metric_name] = v
@@ -426,3 +455,35 @@ class DataProfiler:
                 flattened_results[ds_name] = pd.DataFrame.from_dict(rows, orient='index')
             
         return flattened_results
+
+    def save_to_csv(self, filename: str = "profiling_results.csv"):
+        """
+        Save the profiling results to a CSV file.
+        
+        If multiple datasets are verified, their results are concatenated 
+        with a 'dataset_name' column.
+        
+        Args:
+            filename: Name of the CSV file to save.
+        """
+        results_dict = self._get_results_as_dataframes()
+        if not results_dict:
+            print("No results to save.")
+            return
+
+        # Combine all result DataFrames
+        combined_df = pd.DataFrame()
+        for dataset_name, df_res in results_dict.items():
+            if df_res.empty:
+                continue
+            # Add dataset name as a column for clarity in the merged CSV
+            df_res_copy = df_res.copy()
+            df_res_copy.insert(0, 'dataset_name', dataset_name)
+            combined_df = pd.concat([combined_df, df_res_copy])
+        
+        if combined_df.empty:
+             print("No non-empty results to save.")
+             return
+
+        combined_df.to_csv(filename, index_label='column_name')
+        print(f"Results saved to {filename}")

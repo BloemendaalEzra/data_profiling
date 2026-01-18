@@ -71,6 +71,13 @@ def main():
     if "dataset_0" in results:
         print(results["dataset_0"].to_string())
 
+    # 7. Save Results to CSV
+    print("\nSaving results to CSV...")
+    for dataset_name, df_result in results.items():
+        csv_filename = f"profiling_results_{dataset_name}.csv"
+        df_result.to_csv(csv_filename, index=True)
+        print(f"Saved {dataset_name} results to {csv_filename}")
+
     spark.stop()
 
 if __name__ == "__main__":
