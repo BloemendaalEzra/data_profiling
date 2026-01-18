@@ -2,16 +2,6 @@ import pandas as pd
 import numpy as np
 from typing import Union, List, Dict, Optional, Any
 
-
-try:
-    from pyspark.sql import DataFrame as SparkDataFrame
-    import pyspark.sql.functions as F
-    from pyspark.sql.types import NumericType, StringType
-except ImportError:
-    class SparkDataFrame: pass # Dummy mostly for type hinting if not installed
-    pass
-
-
 class DataProfiler:
     """
     Perform data profiling checks on pandas and PySpark DataFrames.
