@@ -2,6 +2,15 @@ import pandas as pd
 import numpy as np
 from typing import Union, List, Dict, Optional, Any
 
+try:
+    from pyspark.sql import DataFrame as SparkDataFrame
+    import pyspark.sql.functions as F
+    from pyspark.sql.types import NumericType, StringType
+except ImportError:
+    class SparkDataFrame: pass # Dummy mostly for type hinting if not installed
+    pass
+
+
 class DataProfiler:
     """
     Perform data profiling checks on pandas and PySpark DataFrames.
@@ -18,6 +27,9 @@ class DataProfiler:
 
     2. Run checks using `run_checks(check_config=...)`.
        If `check_config` is None, default checks are run (data types, uniqueness, nulls, column length).
+       
+       **Hybrid Mode**: If `check_config` is provided but only targets specific datasets, 
+       the remaining datasets will automatically receive the default checks.
 
     Configuration (`check_config`):
     -------------------------------
@@ -61,6 +73,7 @@ class DataProfiler:
     Example:
     --------
     ```python
+    # 1. Simple Single Dataset
     profiler = DataProfiler(my_df)
     config = {
         "check_nulls": {"columns": ["id", "name"]},
@@ -70,7 +83,19 @@ class DataProfiler:
         }
     }
     results = profiler.run_checks(config)
-    # results['dataset_0'] is a DataFrame with cols like 'null_count', 'out_of_range_count'
+    
+    # 2. Multiple Datasets with Specific Config (Hybrid Mode)
+    profiler = DataProfiler({'train': df_train, 'test': df_test})
+    config = {
+        # Only check range on 'train' dataset
+        "check_range": {
+            "columns": ["salary"],
+            "datasets": ["train"], 
+            "params": {"min_val": 30000, "max_val": 200000}
+        }
+        # 'test' dataset is NOT mentioned, so it will run DEFAULT checks automatically.
+    }
+    results = profiler.run_checks(config)
     ```
     """
     def __init__(self, data: Union[pd.DataFrame, SparkDataFrame, List[Union[pd.DataFrame, SparkDataFrame]], Dict[str, Union[pd.DataFrame, SparkDataFrame]]]):
@@ -370,27 +395,53 @@ class DataProfiler:
             self.results = {name: {} for name in self.dfs.keys()}
 
         if check_config is None:
-            # Default Checks
+            # Default Checks on ALL datasets
             self.check_data_types()
             self.check_uniqueness()
             self.check_nulls()
             self.check_column_length()
         else:
-            # Custom Checks
+            # 1. Identify which datasets are covered by the custom config
+            covered_datasets = set()
+            for settings in check_config.values():
+                if settings is None: 
+                    # None settings implies run on defaults (all columns, all datasets)
+                    covered_datasets = set(self.dfs.keys())
+                    break
+                
+                target_ds = settings.get("datasets")
+                if target_ds is None:
+                    # No dataset restriction implies it runs on ALL datasets
+                    covered_datasets = set(self.dfs.keys())
+                    break
+                
+                covered_datasets.update(target_ds)
+
+            # 2. Run Custom Checks
             for method_name, settings in check_config.items():
                 method = getattr(self, method_name, None)
                 if not method:
                     print(f"Warning: Method {method_name} not found.")
                     continue
                 
-                if settings is None: settings = {} # Should be dict or None
+                if settings is None: settings = {}
                 
                 cols = settings.get("columns", None)
                 datasets = settings.get("datasets", None)
                 params = settings.get("params", {})
                 
-                # Execute
                 method(columns=cols, datasets=datasets, **params)
+            
+            # 3. Run Default Checks on Remaining Datasets
+            all_datasets = set(self.dfs.keys())
+            remaining_datasets = list(all_datasets - covered_datasets)
+            
+            if remaining_datasets:
+                print(f"Running default checks on remaining datasets: {remaining_datasets}")
+                self.check_data_types(datasets=remaining_datasets)
+                self.check_uniqueness(datasets=remaining_datasets)
+                self.check_nulls(datasets=remaining_datasets)
+                self.check_column_length(datasets=remaining_datasets)
         
         return self._get_results_as_dataframes()
 
